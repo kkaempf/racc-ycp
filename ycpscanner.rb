@@ -1,205 +1,185 @@
 module Ycpscanner
-  def fill_queue
-    if @file.eof?
-#      $stderr.puts "eof ! #{@fstack.size}"
-      @file.close unless @file == $stdin
-      unless @fstack.empty?
-	@file, @name, @lineno = @fstack.shift
-#	$stderr.puts "fill! #{@fstack.size}, #{@file}@#{@lineno}"
-        return fill_queue
+  def next_token
+#    $stderr.puts "next_token #{@in_comment}"
+
+    unless @scanner
+      str = @file.read
+      @scanner = StringScanner.new(str.chomp!)
+    else
+      if @scanner.empty?
+ 	if @file && @file.eof?
+      	  $stderr.puts "eof ! #{@fstack.size}"
+	  @file.close unless @file == $stdin
+          unless @fstack.empty?
+	    @file, @name, @lineno = @fstack.shift
+	    $stderr.puts "fill! #{@fstack.size}, #{@file}@#{@lineno}"
+	    @scanner = nil
+            return next_token
+          end
+        end
       end
-      @q.push [false, false]
-      return false
     end
-    str = @file.gets
-    return true unless str
-    @lineno += 1
+    
+    return [false, false] if @scanner.empty?
 
-#    $stderr.puts "fill_queue(#{str})"
-
-    scanner = StringScanner.new(str.chomp!)
-
-    until scanner.empty?
-#      $stderr.puts "#{@q.size}:\"#{scanner.rest}\""
-      if @in_comment
-	if scanner.scan(%r{.*\*/})
-	  @in_comment = false
-	else
-	  break
-	end
+    if @in_comment
+      m = @scanner.scan(%r{.*\*/})
+      if m
+	@in_comment = false
+#	$stderr.puts "NOCOM #{m}"
+      else
+	m = @scanner.scan(%r{.*\n}) # read to eol
+	@lineno += 1
+	return next_token
       end
-
-      case
-      when scanner.scan(/\s+/)
-	next        # ignore space
+    end
+    
+    case
+      when @scanner.scan(/[ \t]+/)
+	return next_token        # ignore space
 	
-      when m = scanner.scan(%r{^#.*$})
-	next
+      when m = @scanner.scan(%r{^#.*\n})
+	@lineno += 1
+	return next_token
 	
-      when m = scanner.scan(%r{^//.*$})
-	next
-
-      when m = scanner.scan(/\n+/)
-	@lineno += m.size
-	next        # ignore newlines
-
-      when m = scanner.scan(%r{/\*})
+      when m = @scanner.scan(%r{/\*})
+#	$stderr.puts "COM:#{@lineno} #{m}"
         @in_comment = true
+	return next_token
+
+      when m = @scanner.scan(%r{//.*})
+#	$stderr.puts "L:#{@lineno}"
+	return next_token        # c++ style comment
+
+      when m = @scanner.scan(%r{(\+|-)?\d*\.\d+})
+	return [:C_FLOAT, m.to_f]
+
+      when m = @scanner.scan(%r{(\+|-)?(0x|0X)([0123456789]|[abcdef]|[ABCDEF])+})
+	return [:C_INTEGER, m.to_i]
+
+      when m = @scanner.scan(%r{(\+|-)?0[01234567]+})
+	return [:C_INTEGER, m.to_i]
+
+      when m = @scanner.scan(%r{(\+|-)?(0|1)(b|B)})
+	return [:C_INTEGER, m.to_i]
 	
-      when m = scanner.scan(%r{//.*})
-	next        # c++ style comment
-
-      # decimalValue = [ "+" | "-" ] ( positiveDecimalDigit *decimalDigit | "0" )
-      # decimalDigit = "0" | positiveDecimalDigit
-      when m = scanner.scan(%r{(\+|-)?\d+})
-	@q.push [:C_INTEGER, m.to_i]
-
-      # hexValue = [ "+" | "-" ] [ "0x" | "0X"] 1*hexDigit
-      #      hexDigit = decimalDigit | "a" | "A" | "b" | "B" | "c" | "C" | "d" | "D" | "e" | "E" | "f" | "F"
-      when m = scanner.scan(%r{(\+|-)?(0x|0X)([0123456789]|[abcdef]|[ABCDEF])+})
-	@q.push [:C_INTEGER, m.to_i]
-
-      # octalValue = [ "+" | "-" ] "0" 1*octalDigit
-      when m = scanner.scan(%r{(\+|-)?0[01234567]+})
-	@q.push [:C_INTEGER, m.to_i]
-
-      #	binaryValue = [ "+" | "-" ] 1*binaryDigit ( "b" | "B" )
-      when m = scanner.scan(%r{(\+|-)?(0|1)(b|B)})
-	@q.push [:C_INTEGER, m.to_i]
-	
-      #      realValue = [ "+" | "-" ] *decimalDigit "." 1*decimalDigit
-      #      [ ( "e" | "E" ) [ "+" | "-" ] 1*decimalDigit ]
-
-      when m = scanner.scan(%r{(\+|-)?\d*\.\d+})
-	@q.push [:C_FLOAT, m.to_f]
+      when m = @scanner.scan(%r{(\+|-)?\d+})
+	return [:C_INTEGER, m.to_i]
 
       #      charValue = // any single-quoted Unicode-character, except single quotes
       
-      when m = scanner.scan(%r{\'([^\'])\'})
-	@q.push [:C_CHAR, scanner[1]]
+      when m = @scanner.scan(%r{\'([^\'])\'})
+	return [:C_CHAR, @scanner[1]]
 
-      #      stringValue = 1*( """ *ucs2Character """ )
-      #      ucs2Character = // any valid UCS-2-character
-
-      when m = scanner.scan(%r{\"([^\\\"]*)\"})
-	@q.push [:C_STRING, scanner[1]]
+      # string
+      when m = @scanner.scan(%r{\"([^\\\"]*)\"})
+	return [:C_STRING, @scanner[1]]
 
       # string with embedded backslash
-      when m = scanner.scan(%r{\"(.*\\.*)\"})
-#	$stderr.puts ":string(#{scanner[1]})"
-	@q.push [:C_STRING, scanner[1]]
+      when m = @scanner.scan(%r{\"(([^\\\"]*)|(\\.))*\"})
+#	$stderr.puts "#{@lineno}:string(#{m})"
+	return [:C_STRING, @scanner[1]]
 
-      when m = scanner.scan(%r{#\[(.*)\]})
-	@q.push [:C_BYTEBLOCK, scanner[1]]
+      when m = @scanner.scan(%r{#\[(.*)\]})
+	return [:C_BYTEBLOCK, @scanner[1]]
       
-      when m = scanner.scan(%r{(\.\w)+})
-	@q.push [:C_PATH, scanner[1]]
-      when m = scanner.scan(%r{\`\w})
-	@q.push [:C_SYMBOL, scanner[1]]
-      when m = scanner.scan(%r{(\w::)+\w})
-	@q.push [:C_NAMESPACE, scanner[1]]
-      when m = scanner.scan(%r{::\w})
-	@q.push [:C_GLOBAL, scanner[1]]
-      when m = scanner.scan(%r{_\(})
-	@q.push [:I18N, scanner[1]]
-      when m = scanner.scan(%r{\$\[})
-	@q.push [:MAPEXPR, scanner[1]]
-      when m = scanner.scan(%r{==})
-	@q.push [:EQUALS, scanner[1]]
-      when m = scanner.scan(%r{\<=})
-	@q.push [:LE, scanner[1]]
-      when m = scanner.scan(%r{\>=})
-	@q.push [:GE, scanner[1]]
-      when m = scanner.scan(%r{\<\>})
-	@q.push [:NEQ, scanner[1]]
-      when m = scanner.scan(%r{\<\<})
-	@q.push [:LEFT, scanner[1]]
-      when m = scanner.scan(%r{\>\>})
-	@q.push [:RIGHT, scanner[1]]
-      when m = scanner.scan(%r{\&\&})
-	@q.push [:AND, scanner[1]]
-      when m = scanner.scan(%r{\|\|})
-	@q.push [:OR, scanner[1]]
-      when m = scanner.scan(%r{\]:})
-	@q.push [:CLOSEBRACKET, scanner[1]]
-      when m = scanner.scan(%r{::})
-	@q.push [:DCOLON, m]
-	
-      when m = scanner.scan(%r{\w+})
+      when m = @scanner.scan(%r{(\.\w+)+})
+	return [:C_PATH, m]
+      when m = @scanner.scan(%r{\`\w+})
+	return [:C_SYMBOL, m]
+      when m = @scanner.scan(%r{_\(})
+	return [:I18N, m]
+      when m = @scanner.scan(%r{\$\[})
+	return [:MAPEXPR, m]
+      when m = @scanner.scan(%r{==})
+	return [:RELOP, m]
+      when m = @scanner.scan(%r{!=})
+	return [:RELOP, m]
+      when m = @scanner.scan(%r{\<=})
+	return [:RELOP, m]
+      when m = @scanner.scan(%r{\>=})
+	return [:RELOP, m]
+      when m = @scanner.scan(%r{\<\>})
+	return [:RELOP, m]
+      when m = @scanner.scan(%r{\<\<})
+	return [:LEFT, m]
+      when m = @scanner.scan(%r{\>\>})  # also used for list/map types
+	return [:RIGHT, m]
+      when m = @scanner.scan(%r{\&\&})  # do not collapse to BOOLOP for assoc
+	return [:AND, m]
+      when m = @scanner.scan(%r{\|\|})
+	return [:OR, m]
+      when m = @scanner.scan(%r{\]:})
+	return [:CLOSEBRACKET, m]
+      when m = @scanner.scan(%r{::})
+	return [:DCOLON, m]
+
+      when m = @scanner.scan(%r{\w+})
 	case m
-	when "false": @q.push [:C_BOOLEAN, false]
-	when "true": @q.push [:C_BOOLEAN, true]
-	when "empty": @q.push [:EMPTY, m]
+	when "false": return [:C_BOOLEAN, false]
+	when "true": return [:C_BOOLEAN, true]
+	when "empty": return [:EMPTY, m]
 	  
-	when "define": @q.push [:DEFINE, m]
-	when "undefine": @q.push [:UNDEFINE, m]
-	when "import": @q.push [:IMPORT, m]
-	when "export": @q.push [:EXPORT, m]
-	when "include": @q.push [:INCLUDE, m]
-	when "static": @q.push [:STATIC, m]
-	when "extern": @q.push [:EXTERN, m]
-	when "module": @q.push [:MODULE, m]
-	when "const": @q.push [:CONST, m]
-	when "typedef": @q.push [:TYPEDEF, m]
-	when "textdomain": @q.push [:TEXTDOMAIN, m]
+	when "define": return [:DEFINE, m]
+	when "undefine": return [:UNDEFINE, m]
+	when "import": return [:IMPORT, m]
+	when "export": return [:EXPORT, m]
+	when "include": return [:INCLUDE, m]
+	when "static": return [:STATIC, m]
+	when "extern": return [:EXTERN, m]
+	when "module": return [:MODULE, m]
+	when "const": return [:CONST, m]
+	when "typedef": return [:TYPEDEF, m]
+	when "textdomain": return [:TEXTDOMAIN, m]
 	  
-	when "return": @q.push [:RETURN, m]
-  	when "continue": @q.push [:CONTINUE, m]
-	when "break": @q.push [:BREAK, m]
-	when "if": @q.push [:IF, m]
-	when "else": @q.push [:ELSE, m]
-	when "is": @q.push [:IS, m]
-	when "do": @q.push [:DO, m]
-	when "while": @q.push [:WHILE, m]
-	when "repeat": @q.push [:REPEAT, m]
-	when "until": @q.push [:UNTIL, m]
-	when "lookup": @q.push [:LOOKUP, m]
-	when "select": @q.push [:SELECT, m]
-	when "switch": @q.push [:SWITCH, m]
-	when "case": @q.push [:CASE, m]
-	when "default": @q.push [:DEFAULT, m]
-	when "foreach": @q.push [:FOREACH, m]
+	when "return": return [:RETURN, m]
+  	when "continue": return [:CONTINUE, m]
+	when "break": return [:BREAK, m]
+	when "if": return [:IF, m]
+	when "else": return [:ELSE, m]
+	when "is": return [:IS, m]
+	when "do": return [:DO, m]
+	when "while": return [:WHILE, m]
+	when "repeat": return [:REPEAT, m]
+	when "until": return [:UNTIL, m]
+	when "switch": return [:SWITCH, m]
+	when "case": return [:CASE, m]
+	when "default": return [:DEFAULT, m]
 
-	when "list": @q.push [:LIST, m]
-	when "map": @q.push [:MAP, m]
+	when "list": return [:LIST, m]
+	when "map": return [:MAP, m]
 	  
-	when "any": @q.push [:C_TYPE, m]
-	when "void": @q.push [:C_TYPE, m]
-	when "boolean": @q.push [:C_TYPE, m]
-	when "integer": @q.push [:C_TYPE, m]
-	when "string": @q.push [:C_TYPE, m]
-	when "byteblock": @q.push [:C_TYPE, m]
-	when "locale": @q.push [:C_TYPE, m]
-	when "term": @q.push [:C_TYPE, m]
-	when "path": @q.push [:C_TYPE, m]
-	when "smbol": @q.push [:C_TYPE, m]
+	when "any": return [:C_TYPE, m]
+	when "void": return [:C_TYPE, m]
+	when "boolean": return [:C_TYPE, m]
+	when "integer": return [:C_TYPE, m]
+	when "string": return [:C_TYPE, m]
+	when "byteblock": return [:C_TYPE, m]
+	when "locale": return [:C_TYPE, m]
+	when "symbol": return [:C_TYPE, m]
+	when "term": return [:C_TYPE, m]
+	when "path": return [:C_TYPE, m]
+	when "smbol": return [:C_TYPE, m]
 	else
-	  @q.push( [:IDENTIFIER, m] )
+	  return( [:SYMBOL, m] )
 	end # case m
-      
-      when m = scanner.scan(%r{[<>(){}\[\],;#=\|\&!^~\?\+\-\*\/\%]})
-	@q.push [m, m]
 	
-      else
-	raise "**** Unrecognized(#{scanner.rest})" unless scanner.rest.empty?
-      end # case
-    end # until scanner.empty?
-#    $stderr.puts "scan done, @q #{@q.size} entries"
-    true
+      when m = @scanner.scan(/./)
+#	$stderr.puts "RETURN <#{m}>"
+        return [m, m]
+
+      when m = @scanner.scan(%r{(\n)+})
+	@lineno += m.size
+	return next_token        # ignore newlines
+
+    end # case
+    raise "**** Unrecognized(#{@scanner.rest[0]})..." unless @scanner.rest.empty?
+    return [false, false]
   end
 
   def parse( file )
     open file
-    @q = []
     do_parse
-  end
-
-  def next_token
-    while @q.empty?
-      break unless fill_queue 
-    end
-#    $stderr.puts "next_token #{@q.first.inspect}"
-    @q.shift
   end
   
   def on_error(*args)
