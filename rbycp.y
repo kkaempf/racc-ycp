@@ -14,8 +14,7 @@ class Ycpparser
     left '*' '/' '%'
     left '+' '-'
     left LEFT RIGHT
-    left '<' '>' LE GE
-    left EQUALS NEQ
+    left '<' '>' RELOP
     right CONST
     left '&'
     left '^'
@@ -29,7 +28,6 @@ class Ycpparser
   token IF THEN ELSE
         DO WHILE UNTIL REPEAT
 	BREAK CONTINUE RETURN
-	LOOKUP SELECT
 	DEFINE UNDEFINE
 	IMPORT EXPORT INCLUDE FULLNAME
 	GLOBAL STATIC EXTERN
@@ -37,12 +35,11 @@ class Ycpparser
 	C_PATH C_SYMBOL C_FLOAT
 	MAP LIST
 	C_TYPE
-	EQUALS LE GE NEQ AND OR LEFT RIGHT
+	RELOP AND OR LEFT RIGHT
 	MAPEXPR I18N
-	IDENTIFIER
 	STRUCT BLOCK
 	IS ISNIL
-	SYMBOL
+	SYMBOL DCOLON
 	TYPEDEF
 	MODULE TEXTDOMAIN
 	CONST 
@@ -50,7 +47,6 @@ class Ycpparser
 	CLOSEBRACKET
 	QUOTED_EXPRESSION QUOTED_BLOCK DCQUOTED_BLOCK
 	SYM_NAMESPACE
-	FOREACH
 rule
 
 ycp
@@ -95,9 +91,6 @@ casted_expression
 
 compact_expression
         : block
-	| LOOKUP '(' expression ',' expression ',' expression ')'
-	| SELECT '(' expression ',' expression ',' expression ')'
-	| FOREACH '(' type identifier ',' identifier ',' expression ')'
 	| function_call
 	| '(' expression ')'
 	| QUOTED_EXPRESSION expression ')'
@@ -125,12 +118,9 @@ infix_expression
 	| '~' expression
 	| expression AND expression
 	| expression OR expression
-	| expression EQUALS expression
+	| expression RELOP expression
 	| expression '<' expression
 	| expression '>' expression
-	| expression LE expression
-	| expression GE expression
-	| expression NEQ expression
 	| '!' expression
 	| '-' expression
 	| expression '?' expression ':' expression
@@ -163,7 +153,7 @@ statement
 	| FULLNAME C_STRING ';'
 	| TEXTDOMAIN C_STRING ';'
 	| EXPORT identifier_list ';'
-	| TYPEDEF type identifier ';'
+	| TYPEDEF type SYMBOL ';'
 	| definition
 	| assignment ';'
 	| function_call ';'
@@ -220,7 +210,7 @@ types
 /* Macro/Function or variable definition */
 
 definition
-        : opt_global DEFINE identifier '('
+        : opt_global DEFINE SYMBOL '('
 	| function_start ';'		/* function declaration */
 	| function_start block			/* function definition */
 	| opt_global_identifier '=' expression ';'		/* variable definition */
@@ -256,17 +246,18 @@ function_start
 */
 
 opt_global_identifier
-        : opt_global opt_define type identifier
+        : opt_global opt_define type SYMBOL
+	  { result = val[3] }
 	;
 
 opt_global
-        : GLOBAL
-	| /* empty */
+	: /* empty */
+        | GLOBAL
 	;
 
 opt_define
-        : DEFINE
-	| /* empty */
+        : /* empty */
+	| DEFINE
 	;
 
 /*----------------------------------------------*/
@@ -294,7 +285,7 @@ tupletype
 /* $$.v.fpval = pointer to formalparam_t	*/
 
 formal_param
-        : type identifier
+        : type SYMBOL
 	;
 
 /* -------------------------------------------------------------- */
@@ -419,8 +410,11 @@ function_name
  */
 
 identifier
-        : IDENTIFIER
-	| SYMBOL
+        : SYMBOL
+	| SYMBOL DCOLON identifier
+	  { result = val[0] + val[1] + val[2] }
+	| DCOLON identifier
+	  { result = val[0] + val[1] }
 	;
 
 identifier_list
@@ -471,6 +465,7 @@ def open name
   @file = file
   @name = name
   @lineno = 1
+#  $stderr.puts "#{@file}:#{@name}"
 end
 
 ---- footer ----
