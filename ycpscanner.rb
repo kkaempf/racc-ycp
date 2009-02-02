@@ -2,25 +2,12 @@ module Ycpscanner
   def next_token
 #    $stderr.puts "next_token #{@in_comment}"
 
-    unless @scanner
-      str = @file.read
-      @scanner = StringScanner.new(str.chomp!)
-    else
-      if @scanner.empty?
- 	if @file && @file.eof?
-      	  $stderr.puts "eof ! #{@fstack.size}"
-	  @file.close unless @file == $stdin
-          unless @fstack.empty?
-	    @file, @name, @lineno = @fstack.shift
-	    $stderr.puts "fill! #{@fstack.size}, #{@file}@#{@lineno}"
-	    @scanner = nil
-            return next_token
-          end
-        end
-      end
+    if @scanner.empty?
+      @scanner, @name, @lineno = @sstack.shift
+      $stderr.puts "[#{@scanner},#{@name}, #{@lineno}]: #{@sstack.size}"
+      return [false, false] unless @scanner
+      return next_token
     end
-    
-    return [false, false] if @scanner.empty?
 
     if @in_comment
       m = @scanner.scan(%r{.*\*/})
@@ -34,6 +21,7 @@ module Ycpscanner
       end
     end
     
+#    puts "**** (#{@scanner.rest[0,16]})..." unless @scanner.rest.empty?
     case
       when @scanner.scan(/[ \t]+/)
 	return next_token        # ignore space
@@ -51,32 +39,30 @@ module Ycpscanner
 #	$stderr.puts "L:#{@lineno}"
 	return next_token        # c++ style comment
 
-      when m = @scanner.scan(%r{(\+|-)?\d*\.\d+})
+      when m = @scanner.scan(%r{\d*\.\d+})
 	return [:C_FLOAT, m.to_f]
 
-      when m = @scanner.scan(%r{(\+|-)?(0x|0X)([0123456789]|[abcdef]|[ABCDEF])+})
+      when m = @scanner.scan(%r{(0x|0X)([0123456789]|[abcdef]|[ABCDEF])+})
 	return [:C_INTEGER, m.to_i]
 
-      when m = @scanner.scan(%r{(\+|-)?0[01234567]+})
+      when m = @scanner.scan(%r{0[01234567]+})
 	return [:C_INTEGER, m.to_i]
 
-      when m = @scanner.scan(%r{(\+|-)?(0|1)(b|B)})
+      when m = @scanner.scan(%r{(0|1)(b|B)})
 	return [:C_INTEGER, m.to_i]
 	
-      when m = @scanner.scan(%r{(\+|-)?\d+})
+      when m = @scanner.scan(%r{\d+})
 	return [:C_INTEGER, m.to_i]
 
-      #      charValue = // any single-quoted Unicode-character, except single quotes
-      
-      when m = @scanner.scan(%r{\'([^\'])\'})
-	return [:C_CHAR, @scanner[1]]
-
       # string
+      # FIXME: count embedded newlines
       when m = @scanner.scan(%r{\"([^\\\"]*)\"})
+#	$stderr.puts "#{@lineno}:string(#{m})"
 	return [:C_STRING, @scanner[1]]
 
       # string with embedded backslash
-      when m = @scanner.scan(%r{\"(([^\\\"]*)|(\\.))*\"})
+      # FIXME: count embedded newlines
+      when m = @scanner.scan(%r{\"(([^\\\"])|(\\.)+|(\\\n)+)*\"})
 #	$stderr.puts "#{@lineno}:string(#{m})"
 	return [:C_STRING, @scanner[1]]
 
@@ -88,6 +74,7 @@ module Ycpscanner
       when m = @scanner.scan(%r{\`\w+})
 	return [:C_SYMBOL, m]
       when m = @scanner.scan(%r{_\(})
+#	$stderr.puts "#{@name}:#{@lineno}"
 	return [:I18N, m]
       when m = @scanner.scan(%r{\$\[})
 	return [:MAPEXPR, m]
@@ -111,8 +98,16 @@ module Ycpscanner
 	return [:OR, m]
       when m = @scanner.scan(%r{\]:})
 	return [:CLOSEBRACKET, m]
+      when m = @scanner.scan(%r{list::reduce}) # /usr/share/YaST2/include/partitioning/ep-settings.ycp:37
+	return [:SYMBOL, m]
+      when m = @scanner.scan(%r{float::ceil}) # /usr/share/YaST2/include/partitioning/ep-hd-dialogs.ycp:105
+	return [:SYMBOL, m]
       when m = @scanner.scan(%r{::})
 	return [:DCOLON, m]
+      when m = @scanner.scan(%r{\`\`\{})
+	return [:QUOTED_BLOCK, m]
+      when m = @scanner.scan(%r{\`\`\(})
+	return [:QUOTED_EXPRESSION, m]
 
       when m = @scanner.scan(%r{\w+})
 	case m
@@ -127,6 +122,7 @@ module Ycpscanner
 	when "include": return [:INCLUDE, m]
 	when "static": return [:STATIC, m]
 	when "extern": return [:EXTERN, m]
+	when "global": return [:GLOBAL, m]
 	when "module": return [:MODULE, m]
 	when "const": return [:CONST, m]
 	when "typedef": return [:TYPEDEF, m]
@@ -148,21 +144,27 @@ module Ycpscanner
 
 	when "list": return [:LIST, m]
 	when "map": return [:MAP, m]
+	when "block": return [:BLOCK, m]
 	  
 	when "any": return [:C_TYPE, m]
 	when "void": return [:C_TYPE, m]
 	when "boolean": return [:C_TYPE, m]
 	when "integer": return [:C_TYPE, m]
+	when "float": return [:C_TYPE, m]
 	when "string": return [:C_TYPE, m]
-	when "byteblock": return [:C_TYPE, m]
 	when "locale": return [:C_TYPE, m]
+	when "byteblock": return [:C_TYPE, m]
 	when "symbol": return [:C_TYPE, m]
 	when "term": return [:C_TYPE, m]
 	when "path": return [:C_TYPE, m]
-	when "smbol": return [:C_TYPE, m]
 	else
+	  t = @symbols[m]                  # typedef'd ?
+	  return( [t, m] ) if t
 	  return( [:SYMBOL, m] )
 	end # case m
+	
+      when m = @scanner.scan(/\f/)         # embedded ^L
+        return next_token
 	
       when m = @scanner.scan(/./)
 #	$stderr.puts "RETURN <#{m}>"
@@ -184,7 +186,7 @@ module Ycpscanner
   
   def on_error(*args)
     $stderr.puts "Err #{@name}@#{@lineno}: args=#{args.inspect}"
-    raise
+    raise "Parse error"
   end
 
 end # module

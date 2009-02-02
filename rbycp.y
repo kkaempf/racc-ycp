@@ -149,11 +149,16 @@ statement
 	| SYM_NAMESPACE DCQUOTED_BLOCK block_end
 	| MODULE C_STRING ';'
 	| INCLUDE C_STRING ';'
+	  { open val[1] unless @seen[val[1]] }
 	| IMPORT C_STRING ';'
 	| FULLNAME C_STRING ';'
 	| TEXTDOMAIN C_STRING ';'
 	| EXPORT identifier_list ';'
 	| TYPEDEF type SYMBOL ';'
+	  { result = val[1]
+	    @symbols[val[2]] = :C_TYPE
+	    $stderr.puts "typedef #{result}"
+	  }
 	| definition
 	| assignment ';'
 	| function_call ';'
@@ -311,8 +316,13 @@ constant
 	| C_FLOAT
 	| C_STRING
 	| C_BYTEBLOCK
-	| C_PATH
+	| path
 	| C_SYMBOL
+	;
+
+path
+        : C_PATH
+	| '.' string
 	;
 
 /* -------------------------------------------------------------- */
@@ -441,31 +451,39 @@ def initialize debug, includes
   @includes = includes
   @lineno = 1
   @file = nil
-  @fname = nil
-  @fstack = []
+  @name = nil
+  @sstack = []
+  @seen = Hash.new
   @in_comment = false
+  @symbols = Hash.new
 end
 
 def open name
-  $stderr.puts "open #{name}"
+#  $stderr.puts "\tXopen #{name}"
   if name.kind_of? IO
     file = name
   else
     p = Pathname.new name
+    @seen[name] = p
     file = nil
+    f = nil
     @includes.each do |incdir|
       f = incdir + p
 #      $stderr.puts "Trying #{f}"
       file = File.open( f ) if File.readable?( f )
       break if file
     end
-    raise "Cannot open #{name}" unless file
+    raise "Cannot open \"#{name}\"" unless file
+    $stderr.puts "\topen #{f}"
   end
-  @fstack << [ @file, @name, @lineno ] if @file  
-  @file = file
+  str = file.read
+  file.close unless file == $stdin
+  raise "Read error #{name}" unless str
+  @sstack << [ @scanner, @name, @lineno ] if @scanner
+  @scanner = StringScanner.new(str)
   @name = name
   @lineno = 1
-#  $stderr.puts "#{@file}:#{@name}"
+#  $stderr.puts "#{@scanner}:#{@name}"
 end
 
 ---- footer ----
@@ -476,7 +494,9 @@ includes = [Pathname.new "."]
 ycpfile = nil
 
 while ARGV.size > 0
-  case opt = ARGV.shift
+  opt = ARGV.shift
+#  $stderr.puts "opt<#{opt}>"
+  case opt
     when "-h":
       $stderr.puts "Ruby YCP compiler"
       $stderr.puts "rbycp [-h] [-d] [-I <dir>] [<ycpfile>]"
@@ -489,7 +509,7 @@ while ARGV.size > 0
     when "-d": debug = true
     when "-I"
       includes << Pathname.new(ARGV.shift)
-    when /-.+/
+    when /^-.+/
       $stderr.puts "Undefined option #{opt}"
     else
       $stderr.puts "Multiple input files given, discarding previous #{ycpfile}" if ycpfile
@@ -499,18 +519,17 @@ end
 
 parser = Ycpparser.new debug, includes
 
-puts "ycpparser starting"
-
 ycpfile = $stdin unless ycpfile
 
 begin
   val = parser.parse( ycpfile )
   puts "Accept!"
-rescue ParseError
-  puts "Line #{parser.lineno}:"
-  puts $!
-  raise
-rescue
-  puts 'unexpected error ?!'
-  raise
+#rescue ParseError
+#  puts "Line #{@lineno}:"
+#  puts $!
+#  exit 1
+#rescue Exception => e
+#  puts "Exception: #{e}"
+#  exit 1
 end
+#exit 0
