@@ -102,13 +102,14 @@ module Ycpscanner
 	return [:SYMBOL, m]
       when m = @scanner.scan(%r{float::ceil}) # /usr/share/YaST2/include/partitioning/ep-hd-dialogs.ycp:105
 	return [:SYMBOL, m]
-      when m = @scanner.scan(%r{::})
-	return [:DCOLON, m]
       when m = @scanner.scan(%r{\`\`\{})
 	return [:QUOTED_BLOCK, m]
       when m = @scanner.scan(%r{\`\`\(})
 	return [:QUOTED_EXPRESSION, m]
 
+      when m = @scanner.scan(%r{(\w+)?(::\w+)+})
+	return [:SYMBOL, m]
+	
       when m = @scanner.scan(%r{\w+})
 	case m
 	when "false": return [:C_BOOLEAN, false]

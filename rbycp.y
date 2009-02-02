@@ -39,7 +39,7 @@ class Ycpparser
 	MAPEXPR I18N
 	STRUCT BLOCK
 	IS ISNIL
-	SYMBOL DCOLON
+	SYMBOL
 	TYPEDEF
 	MODULE TEXTDOMAIN
 	CONST 
@@ -321,8 +321,15 @@ constant
 	;
 
 path
+        : path_element
+	| path path_element
+	  { result = val[0] + val[1] }
+	;
+	
+path_element
         : C_PATH
 	| '.' string
+	| '.'
 	;
 
 /* -------------------------------------------------------------- */
@@ -421,10 +428,6 @@ function_name
 
 identifier
         : SYMBOL
-	| SYMBOL DCOLON identifier
-	  { result = val[0] + val[1] + val[2] }
-	| DCOLON identifier
-	  { result = val[0] + val[1] }
 	;
 
 identifier_list
