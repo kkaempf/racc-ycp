@@ -4,7 +4,7 @@ module Ycpscanner
 
     if @scanner.empty?
       @scanner, @name, @lineno = @sstack.shift
-      $stderr.puts "[#{@scanner},#{@name}, #{@lineno}]: #{@sstack.size}"
+#      $stderr.puts "[#{@scanner},#{@name}, #{@lineno}]: #{@sstack.size}"
       return [false, false] unless @scanner
       return next_token
     end
