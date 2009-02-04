@@ -7,6 +7,7 @@ class Ycpparser
 /*    nonassoc UMINUS */
     left '['
     left CLOSEBRACKET
+    right '}'
     left ':'
     right '~'
     left ELSE
@@ -137,7 +138,6 @@ block_end
 
 /* -------------------------------------------------------------- */
 /* Statements */
-/* statements are always inside a block, so p_parser->m_block_stack is valid !  */
 
 statements
         : statements statement
@@ -151,6 +151,12 @@ statement
 	| INCLUDE C_STRING ';'
 	  { open val[1] unless @seen[val[1]] }
 	| IMPORT C_STRING ';'
+	  { v = val[1]
+	    f = v+".ycp"
+	    unless( @seen[f] || (v == "SCR") || (v == "UI") )
+	      open f, true
+	    end
+	  }
 	| FULLNAME C_STRING ';'
 	| TEXTDOMAIN C_STRING ';'
 	| EXPORT identifier_list ';'
@@ -461,7 +467,7 @@ def initialize debug, includes
   @symbols = Hash.new
 end
 
-def open name
+def open name, is_module = false
 #  $stderr.puts "\tXopen #{name}"
   if name.kind_of? IO
     file = name
@@ -476,8 +482,9 @@ def open name
       file = File.open( f ) if File.readable?( f )
       break if file
     end
+    return unless file || !is_module  # ignore built-in modules
     raise "Cannot open \"#{name}\"" unless file
-    $stderr.puts "\topen #{f}"
+#    $stderr.puts "\topen #{f}"
   end
   str = file.read
   file.close unless file == $stdin
