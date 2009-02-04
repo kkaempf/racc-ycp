@@ -2,7 +2,10 @@
 
 for f in `find /usr/share/YaST2 -name \*.ycp`; do
   echo $f
-  ruby rbycp.rb -I /usr/share/YaST2/include $f
+  if [ $f != "/usr/share/YaST2/clients/proxy_proposal.ycp" ];
+  then
+    ruby rbycp.rb -I /usr/share/YaST2/include -I /usr/share/YaST2/modules $f
+  fi
   if [ $? -ne 0 ]; 
   then
     break
